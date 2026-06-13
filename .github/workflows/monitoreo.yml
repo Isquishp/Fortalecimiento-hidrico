@@ -1,0 +1,47 @@
+name: Monitoreo Automatico JAAPRV Sinchal
+
+on:
+  schedule:
+    # Se ejecuta todos los días a las 05:00 UTC (Equivale a las 00:00 AM en Ecuador)
+    - cron: '0 5 * * *'
+  workflow_dispatch: # Te permite activar el script manualmente desde GitHub cuando quieras probar
+
+jobs:
+  run-analisis:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Descargar el estado actual del repositorio (incluyendo tu .db actual)
+    - name: Descargar repositorio
+      uses: actions/checkout@v3
+
+    # 2. Configurar el entorno de Python
+    - name: Configurar Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-python: '3.10'
+
+    # 3. Instalar las librerías necesarias
+    - name: Instalar dependencias
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # 4. Ejecutar tu script de análisis y sincronización
+    - name: Ejecutar Script de Monitoreo
+      run: python tu_script.py
+
+    # 5. Guardar los cambios (El .db actualizado y el nuevo PDF) en tu GitHub
+    - name: Guardar historial y Reporte PDF
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action Bot"
+        
+        # Añadir la base de datos actualizada y el PDF generado
+        git add base_datos_jaaprv.db reporte_jaaprv_presion.pdf graficas/*.png
+        
+        # Hacer el commit solo si hay datos nuevos
+        git commit -m "Sincronización automática: $(date +'%Y-%m-%d %H:%M:%S') [Ecuador]" || echo "No hay cambios nuevos que guardar."
+        
+        # Subir los cambios de vuelta al repositorio de forma segura
+        git push
