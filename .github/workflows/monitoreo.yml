@@ -11,15 +11,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # 1. Descargar el estado actual del repositorio (incluyendo tu .db actual)
+    # 1. Descargar el estado actual del repositorio (Actualizado a v4)
     - name: Descargar repositorio
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
-    # 2. Configurar el entorno de Python
+    # 2. Configurar el entorno de Python (Corregido 'python-version' y actualizado a v5)
     - name: Configurar Python 3.10
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
-        python-python: '3.10'
+        python-version: '3.10'
 
     # 3. Instalar las librerías necesarias
     - name: Instalar dependencias
