@@ -29,7 +29,7 @@ jobs:
 
     # 4. Ejecutar tu script de análisis y sincronización
     - name: Ejecutar Script de Monitoreo
-      run: python tu_script.py
+      run: python script_scraper.py
 
     # 5. Guardar los cambios (El .db actualizado y el nuevo PDF) en tu GitHub
     - name: Guardar historial y Reporte PDF
