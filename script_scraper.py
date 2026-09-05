@@ -108,66 +108,56 @@ print("\n[2/3] Consultando precipitación histórica desde OpenWeatherMap...")
 
 precipitacion_activa = False   # Se activa si la integración funcionó
 
+# --- OPENWEATHER API ---
+# La API Key se lee desde la variable de entorno OPENWEATHER_API_KEY
+OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY", "")
+
+# ==========================================
+# MÓDULO 2: OPENWEATHER — CLIMA ACTUAL (RECOLECCIÓN DIARIA)
+# ==========================================
+print("\n[2/3] Consultando clima actual desde OpenWeatherMap...")
+
+precipitacion_activa = False
+
 if not OPENWEATHER_API_KEY:
     print("   -> AVISO: Variable OPENWEATHER_API_KEY no configurada.")
     print("      Para activar: exporta la variable o agrégala como Secret en GitHub Actions.")
     print("      El script continuará con datos del sensor solamente.")
 else:
     try:
-        # OpenWeather History API v1.0 — entrega datos horarios por timestamp UNIX
-        # Iteramos mes a mes para cubrir los últimos 6 meses de forma confiable
-        registros_lluvia = 0
-        hoy = datetime.utcnow()
-
-        for meses_atras in range(6, 0, -1):
-            # Calcular inicio y fin del bloque mensual (máximo 30 días por llamada)
-            fecha_fin   = hoy - timedelta(days=(meses_atras - 1) * 30)
-            fecha_inicio = fecha_fin - timedelta(days=30)
-
-            ts_inicio = int(fecha_inicio.timestamp())
-            ts_fin    = int(fecha_fin.timestamp())
-
-            # Llamada a la History API de OpenWeather (One Call 3.0 / History)
-            ow_url = (
-                f"https://history.openweathermap.org/data/2.5/history/city"
-                f"?lat={OW_LAT}&lon={OW_LON}"
-                f"&type=hour"
-                f"&start={ts_inicio}&end={ts_fin}"
-                f"&appid={OPENWEATHER_API_KEY}&units=metric"
-            )
-
-            resp = requests.get(ow_url, timeout=30)
-            if resp.status_code != 200:
-                print(f"   -> Error HTTP {resp.status_code} en bloque {meses_atras} meses atrás: {resp.text[:120]}")
-                continue
-
+        # Usamos la API Current Weather de OpenWeather (100% Gratuita)
+        ow_url = (
+            f"https://api.openweathermap.org/data/2.5/weather"
+            f"?lat={OW_LAT}&lon={OW_LON}"
+            f"&appid={OPENWEATHER_API_KEY}&units=metric"
+        )
+        
+        resp = requests.get(ow_url, timeout=30)
+        if resp.status_code == 200:
             ow_data = resp.json()
-            registros_bloque = ow_data.get("list", [])
-
-            for item in registros_bloque:
-                # Timestamp UTC → datetime Ecuador (UTC-5)
-                dt_utc = datetime.utcfromtimestamp(item["dt"])
-                dt_local = dt_utc - timedelta(hours=5)
-                fecha_str = dt_local.strftime('%Y-%m-%d %H:%M:%S')
-
-                # La lluvia viene en "rain.1h" (mm en la última hora); puede estar ausente
-                lluvia_mm = item.get("rain", {}).get("1h", 0.0)
-                humedad   = item.get("main", {}).get("humidity", None)
-                temp_c    = item.get("main", {}).get("temp", None)
-                descripcion = item.get("weather", [{}])[0].get("description", "")
-
-                try:
-                    cursor.execute('''
-                        INSERT INTO precipitacion (fecha, lluvia_mm, humedad_pct, temp_c, descripcion)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (fecha_str, lluvia_mm, humedad, temp_c, descripcion))
-                    registros_lluvia += 1
-                except sqlite3.IntegrityError:
-                    continue
-
-        conn.commit()
-        print(f"   -> Éxito. Se añadieron {registros_lluvia} registros de precipitación histórica.")
-        precipitacion_activa = True
+            
+            # Hora actual local
+            fecha_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Extraer datos (la lluvia viene si llovió en la última hora)
+            lluvia_mm = ow_data.get("rain", {}).get("1h", 0.0)
+            humedad   = ow_data.get("main", {}).get("humidity", 0.0)
+            temp_c    = ow_data.get("main", {}).get("temp", 0.0)
+            descripcion = ow_data.get("weather", [{}])[0].get("description", "")
+            
+            try:
+                cursor.execute('''
+                    INSERT INTO precipitacion (fecha, lluvia_mm, humedad_pct, temp_c, descripcion)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (fecha_str, lluvia_mm, humedad, temp_c, descripcion))
+                conn.commit()
+                print(f"   -> Éxito. Se guardó el clima actual: Temp {temp_c}°C, Lluvia {lluvia_mm}mm")
+                precipitacion_activa = True
+            except sqlite3.IntegrityError:
+                print("   -> El clima de este momento ya estaba registrado.")
+                precipitacion_activa = True
+        else:
+            print(f"   -> Error HTTP {resp.status_code} al consultar OpenWeather: {resp.text[:120]}")
 
     except Exception as e:
         print(f"   -> Error al consultar OpenWeatherMap: {e}")
@@ -472,8 +462,8 @@ else:
     story.append(t)
     story.append(Spacer(1, 0.5*cm))
 
-    # --- SECCIÓN 3: OpenWeather — precipitación e impacto ---
-    story.append(Paragraph("3. Análisis de Precipitación — OpenWeatherMap (Últimos 6 Meses)", h1_s))
+    # --- SECCIÓN 3: OpenWeatherMap — precipitación e impacto ---
+    story.append(Paragraph("3. Análisis de Precipitación — OpenWeatherMap (Recolección Diaria)", h1_s))
 
     if precipitacion_activa and not df_lluvia.empty:
         # Interpretación de la correlación
@@ -486,9 +476,9 @@ else:
             return f"{r:.3f} — correlación {fuerza} {direccion}"
 
         story.append(Paragraph(
-            f"Se integró la fuente de precipitación histórica de OpenWeatherMap para las coordenadas "
-            f"de la zona de captación ({OW_LAT}°, {OW_LON}°). Este módulo enriquece el modelo "
-            f"matemático con la variable que faltaba: la lluvia como entrada al sistema hídrico.", norm_s))
+            f"Se integró la fuente de precipitación actual de OpenWeatherMap para las coordenadas "
+            f"de la zona de captación ({OW_LAT}°, {OW_LON}°). Se recopila un registro diario desde "
+            f"el 4 de septiembre para enriquecer el modelo matemático con la lluvia como entrada al sistema.", norm_s))
 
         ow_data_table = [
             ["Métrica Climática", "Valor"],
@@ -537,10 +527,6 @@ else:
             "⚠ INTEGRACIÓN OPENWEATHER NO ACTIVA en esta ejecución. "
             "Para activarla, configure el Secret OPENWEATHER_API_KEY en GitHub Actions "
             "o exporte la variable de entorno antes de ejecutar el script.", warn_s))
-        story.append(Paragraph(
-            "Pasos para activar: 1) Obtenga una API Key gratuita en openweathermap.org. "
-            "2) En GitHub: Settings → Secrets → New repository secret → "
-            "Nombre: OPENWEATHER_API_KEY. 3) El próximo run automático incluirá los datos de lluvia.", norm_s))
 
     story.append(Spacer(1, 0.3*cm))
 
@@ -580,4 +566,4 @@ else:
     # Compilar el PDF
     doc.build(story)
     print(f"\n✓ REPORTE PDF GENERADO CON ÉXITO: '{PDF_OUTPUT_PATH}'")
-    print(f"  Incluye datos OpenWeather: {'SÍ' if precipitacion_activa else 'NO (configura OPENWEATHER_API_KEY)'}")
+    print(f"  Incluye datos OpenWeatherMap: {'SÍ' if precipitacion_activa else 'NO (configura OPENWEATHER_API_KEY)'}")
