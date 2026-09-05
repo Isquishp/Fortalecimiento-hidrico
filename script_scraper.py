@@ -127,7 +127,7 @@ else:
     try:
         # Usamos la API Current Weather de OpenWeather (100% Gratuita)
         ow_url = (
-            f"https://api.openweathermap.org/data/2.5/weather"
+            f"https://api.openweathermap.org/data/4.0/onecall/"
             f"?lat={OW_LAT}&lon={OW_LON}"
             f"&appid={OPENWEATHER_API_KEY}&units=metric"
         )
@@ -279,6 +279,14 @@ else:
     # ==========================================
     # GENERACIÓN DE GRÁFICOS
     # ==========================================
+  # ==========================================
+# SECCIÓN DE CONSTRUCCIÓN DEL REPORTE PDF
+# (COPIAR DESDE AQUÍ HASTA EL FINAL DEL SCRIPT)
+# ==========================================
+
+    # ==========================================
+    # GENERACIÓN DE GRÁFICOS
+    # ==========================================
     fmt = mdates.DateFormatter("%d/%m %H:%M")
 
     # GRÁFICA 1: Serie temporal de presión completa
@@ -312,6 +320,40 @@ else:
     ax.legend()
     plt.tight_layout()
     plt.savefig(os.path.join(GRAFICAS_DIR, "histograma_presion.png"), dpi=150)
+    plt.close()
+
+    # GRÁFICA 2.1: BOXPLOT (CAJA Y BIGOTES) — NUEVO GRÁFICO
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bp = ax.boxplot([df_operativo["presion_psi"]], 
+                     patch_artist=True,
+                     widths=0.5,
+                     showmeans=True,
+                     meanprops=dict(marker='D', markerfacecolor='red', markersize=8, label='Media'))
+    ax.set_xticklabels(["Presión Operativa"])
+    
+    # Colorear la caja
+    for patch in bp['boxes']:
+        patch.set_facecolor('#FF9800')
+        patch.set_alpha(0.7)
+    
+    # Colorear los elementos
+    for whisker in bp['whiskers']:
+        whisker.set(color='#1565C0', linewidth=1.5)
+    for cap in bp['caps']:
+        cap.set(color='#1565C0', linewidth=1.5)
+    for median in bp['medians']:
+        median.set(color='darkred', linewidth=2)
+    
+    ax.set_ylabel("Presión [psi]", fontsize=11)
+    ax.set_title("Distribución Estadística de Presión — Caja y Bigotes", fontsize=12, fontweight='bold')
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    # Leyenda personalizada
+    ax.text(1.15, p_mean, f"Media: {p_mean:.2f} psi", fontsize=9, color='red', fontweight='bold')
+    ax.text(1.15, p_median, f"Mediana: {p_median:.2f} psi", fontsize=9, color='darkred', fontweight='bold')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(GRAFICAS_DIR, "boxplot_presion.png"), dpi=150)
     plt.close()
 
     # GRÁFICA 3: Patrón horario de presión (mediana)
@@ -458,6 +500,7 @@ else:
         f"eléctricos (>120 psi), la red exhibe una presión operativa promedio de "
         f"<b>{p_mean:.2f} psi</b>, con una variación estándar de <b>{p_std:.2f} psi</b> y "
         f"un pico máximo puntual de <b>{p_max_absoluto:.1f} psi</b> (posible golpe de ariete).", norm_s))
+    story.append(Spacer(1, 0.3*cm))
 
     # --- SECCIÓN 2: Tabla estadística del sensor ---
     story.append(Paragraph("2. Resumen Estadístico del Sensor", h1_s))
@@ -467,6 +510,7 @@ else:
         ["Presión Mínima de Red",              f"{p_min:.1f} psi"],
         ["Presión Máxima Comercial (< 120)",   f"{p_max_operativa:.1f} psi"],
         ["Presión Promedio Normal de Red",     f"{p_mean:.2f} psi"],
+        ["Mediana Operativa",                  f"{p_median:.2f} psi"],
         ["Desviación Estándar (Dispersión)",   f"{p_std:.2f} psi"],
         ["Pico Máximo Absoluto (Posible Ariete)", f"{p_max_absoluto:.1f} psi"],
         ["Anomalías / Transitorios Eléctricos",   str(len(anomalias))],
@@ -481,7 +525,20 @@ else:
         ("PADDING",      (0,0), (-1,-1), 5),
     ]))
     story.append(t)
-    story.append(Spacer(1, 0.5*cm))
+    story.append(Spacer(1, 0.4*cm))
+
+    # --- SECCIÓN 2.1: BOXPLOT (NUEVO) ---
+    story.append(Paragraph("2.1 Distribución Visual — Caja y Bigotes", h1_s))
+    story.append(Paragraph(
+        "El gráfico de caja y bigotes representa visualmente la distribución de presión: "
+        "la caja contiene el 50% central de los datos, la línea roja dentro es la mediana, "
+        "los bigotes muestran el rango operativo, y cualquier punto aislado es una anomalía.", norm_s))
+    story.append(Spacer(1, 0.2*cm))
+    boxplot_png = os.path.join(GRAFICAS_DIR, "boxplot_presion.png")
+    if os.path.exists(boxplot_png):
+        story.append(Image(boxplot_png, width=13*cm, height=8*cm))
+    story.append(Spacer(1, 0.4*cm))
+    story.append(PageBreak())
 
     # --- SECCIÓN 3: OpenWeatherMap — precipitación e impacto ---
     story.append(Paragraph("3. Análisis de Precipitación — OpenWeatherMap (Recolección Diaria)", h1_s))
@@ -500,6 +557,7 @@ else:
             f"Se integró la fuente de precipitación actual de OpenWeatherMap para las coordenadas "
             f"de la zona de captación ({OW_LAT}°, {OW_LON}°). Se recopila un registro diario desde "
             f"el 4 de septiembre para enriquecer el modelo matemático con la lluvia como entrada al sistema.", norm_s))
+        story.append(Spacer(1, 0.2*cm))
 
         ow_data_table = [
             ["Métrica Climática", "Valor"],
@@ -565,6 +623,7 @@ else:
     story.append(Paragraph("5. Perfil Operativo Horario Continuo", h1_s))
     story.append(Image(os.path.join(GRAFICAS_DIR, "presion_por_hora.png"),
                        width=15*cm, height=5*cm))
+    story.append(Spacer(1, 0.4*cm))
     story.append(PageBreak())
 
     # --- SECCIÓN 6: Gráficos de precipitación (solo si activo) ---
@@ -572,42 +631,56 @@ else:
     correl_png = os.path.join(GRAFICAS_DIR, "correlacion_lluvia.png")
 
     if os.path.exists(lluvia_png):
-        story.append(Spacer(1, 0.3*cm))
         story.append(Paragraph("6. Precipitación Histórica (OpenWeatherMap)", h1_s))
         story.append(Image(lluvia_png, width=16*cm, height=5.3*cm))
+        story.append(Spacer(1, 0.3*cm))
 
     if os.path.exists(correl_png):
-        story.append(Spacer(1, 0.3*cm))
         story.append(Paragraph("7. Correlación Lluvia ↔ Presión / Nivel", h1_s))
         story.append(Image(correl_png, width=16*cm, height=5.5*cm))
+        story.append(Spacer(1, 0.3*cm))
         story.append(Paragraph(
             "<b>Nota metodológica:</b> La correlación se calculó agregando ambas fuentes "
             "por día calendario (mediana del sensor + suma de lluvia). El coeficiente r de "
             "Pearson mide la relación lineal entre variables: r cercano a +1 o -1 indica "
             "correlación fuerte; r cercano a 0 indica independencia estadística.", norm_s))
+        story.append(Spacer(1, 0.3*cm))
+
+    story.append(PageBreak())
 
     # --- SECCIÓN 8: Conclusiones y Recomendaciones ---
-    story.append(PageBreak())
     story.append(Paragraph("Conclusiones y Recomendaciones", title_s))
     story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1565C0")))
     story.append(Spacer(1, 0.5*cm))
     
     story.append(Paragraph("Estado general del sistema", h1_s))
-    story.append(Paragraph(f"La red muestra un comportamiento general con una presión media operativa "
-                           f"de {p_mean:.2f} psi. Se han identificado {len(anomalias)} "
-                           "eventos transitorios (picos o caídas) que se salen del comportamiento típico.", norm_s))
+    story.append(Paragraph(
+        f"La red muestra un comportamiento general con una presión media operativa "
+        f"de <b>{p_mean:.2f} psi</b> (mediana: <b>{p_median:.2f} psi</b>). Se han identificado "
+        f"<b>{len(anomalias)}</b> eventos transitorios (picos o caídas) que se salen del comportamiento típico. "
+        f"El 50% de las lecturas operativas se concentran entre <b>{df_operativo['presion_psi'].quantile(0.25):.1f}</b> "
+        f"y <b>{df_operativo['presion_psi'].quantile(0.75):.1f} psi</b>.", norm_s))
+    story.append(Spacer(1, 0.3*cm))
     
     story.append(Paragraph("Próximos pasos recomendados", h1_s))
-    story.append(Paragraph("• Monitorear continuamente los picos máximos para descartar problemas de golpe de ariete.<br/>"
-                           "• Mantener el cruce diario de datos de precipitación para consolidar el modelo matemático.<br/>"
-                           "• Inspeccionar las válvulas y bombas si la frecuencia de anomalías aumenta.", norm_s))
+    story.append(Paragraph(
+        "• <b>Monitorear continuamente</b> los picos máximos para descartar problemas de golpe de ariete.<br/>"
+        "• <b>Mantener el cruce diario</b> de datos de precipitación para consolidar el modelo matemático de predicción.<br/>"
+        "• <b>Inspeccionar válvulas y bombas</b> si la frecuencia de anomalías aumenta en los próximos meses.<br/>"
+        "• <b>Validar correlación lluvia-presión</b> conforme acumule más registros de precipitación (objetivo: 3 meses de datos).", norm_s))
+    story.append(Spacer(1, 0.3*cm))
     
     story.append(Paragraph("Limitaciones del análisis actual", h1_s))
-    story.append(Paragraph("El sensor ultrasónico de nivel puede presentar pérdida de eco, lecturas nulas "
-                           "o ruido por condensación y telarañas, lo que limita el análisis confiable del volumen "
-                           "de almacenamiento en tiempo real.", norm_s))
+    story.append(Paragraph(
+        "<b>Sensor de nivel ultrasónico:</b> Puede presentar pérdida de eco, lecturas nulas "
+        "o ruido por condensación y telarañas, lo que limita el análisis confiable del volumen "
+        "de almacenamiento en tiempo real. Se recomienda reparación o reemplazo prioritario.<br/><br/>"
+        "<b>Datos de precipitación:</b> Recolección iniciada el 4 de septiembre 2026. Requiere mínimo 3 meses "
+        "de histórico para validar correlaciones estadísticas significativas.", norm_s))
+    story.append(Spacer(1, 0.5*cm))
 
     # Compilar el PDF
     doc.build(story, onFirstPage=add_header_footer, onLaterPages=add_header_footer)
     print(f"\n✓ REPORTE PDF GENERADO CON ÉXITO: '{PDF_OUTPUT_PATH}'")
     print(f"  Incluye datos OpenWeatherMap: {'SÍ' if precipitacion_activa else 'NO (configura OPENWEATHER_API_KEY)'}")
+    print(f"  Gráficos incluidos: serie temporal, histograma, boxplot, patrón horario, precipitación, correlación")
