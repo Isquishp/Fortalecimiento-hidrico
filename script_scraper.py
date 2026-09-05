@@ -22,17 +22,14 @@ DB_PATH = "base_datos_jaaprv.db"
 CHANNEL_ID = "2941382"
 
 # --- OPENWEATHER API ---
-# La API Key se lee desde la variable de entorno OPENWEATHER_API_KEY
-# En GitHub Actions: Settings > Secrets > New repository secret
 OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY", "")
 
 # Coordenadas de la zona de monitoreo JAAPRV Sinchal
-# (Ajustar latitud/longitud exactas de la captación hídrica)
-OW_LAT  = -1.940948   # Latitud  — Ajustar al punto exacto de la captación
-OW_LON  = -80.697497   # Longitud — Ajustar al punto exacto de la captación
+OW_LAT  = -1.940948   # Latitud
+OW_LON  = -80.697497   # Longitud
 OW_CITY = "Sinchal, EC"
 
-# Detectar el directorio de ejecución actual de forma automática
+# Detectar el directorio de ejecución actual
 BASE_DIR = os.getcwd()
 GRAFICAS_DIR = os.path.join(BASE_DIR, "graficas")
 os.makedirs(GRAFICAS_DIR, exist_ok=True)
@@ -54,13 +51,15 @@ cursor.execute('''
     )
 ''')
 
-# Tabla de precipitación histórica (OpenWeatherMap)
+# Tabla de precipitación y clima (OpenWeatherMap) — EXPANDIDA
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS precipitacion (
         fecha TEXT UNIQUE,
         lluvia_mm REAL,
         humedad_pct REAL,
         temp_c REAL,
+        velocidad_viento_ms REAL,
+        presion_atm_hpa REAL,
         descripcion TEXT
     )
 ''')
@@ -102,17 +101,6 @@ except Exception as e:
     print(f"   -> Alerta: No se pudo conectar con ThingSpeak ({e}). Usando histórico local.")
 
 # ==========================================
-# MÓDULO 2: OPENWEATHER — PRECIPITACIÓN HISTÓRICA (ÚLTIMOS 6 MESES)
-# ==========================================
-print("\n[2/3] Consultando precipitación histórica desde OpenWeatherMap...")
-
-precipitacion_activa = False   # Se activa si la integración funcionó
-
-# --- OPENWEATHER API ---
-# La API Key se lee desde la variable de entorno OPENWEATHER_API_KEY
-OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY", "")
-
-# ==========================================
 # MÓDULO 2: OPENWEATHER — CLIMA ACTUAL (RECOLECCIÓN DIARIA)
 # ==========================================
 print("\n[2/3] Consultando clima actual desde OpenWeatherMap...")
@@ -127,7 +115,7 @@ else:
     try:
         # Usamos la API Current Weather de OpenWeather (100% Gratuita)
         ow_url = (
-            f"https://api.openweathermap.org/data/2.5/weather/"
+            f"https://api.openweathermap.org/data/2.5/weather"
             f"?lat={OW_LAT}&lon={OW_LON}"
             f"&appid={OPENWEATHER_API_KEY}&units=metric"
         )
@@ -139,19 +127,21 @@ else:
             # Hora actual local
             fecha_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
-            # Extraer datos (la lluvia viene si llovió en la última hora)
+            # Extraer TODAS las variables climáticas disponibles
             lluvia_mm = ow_data.get("rain", {}).get("1h", 0.0)
             humedad   = ow_data.get("main", {}).get("humidity", 0.0)
             temp_c    = ow_data.get("main", {}).get("temp", 0.0)
+            velocidad_viento = ow_data.get("wind", {}).get("speed", 0.0)
+            presion_atm = ow_data.get("main", {}).get("pressure", 0.0)
             descripcion = ow_data.get("weather", [{}])[0].get("description", "")
             
             try:
                 cursor.execute('''
-                    INSERT INTO precipitacion (fecha, lluvia_mm, humedad_pct, temp_c, descripcion)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (fecha_str, lluvia_mm, humedad, temp_c, descripcion))
+                    INSERT INTO precipitacion (fecha, lluvia_mm, humedad_pct, temp_c, velocidad_viento_ms, presion_atm_hpa, descripcion)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (fecha_str, lluvia_mm, humedad, temp_c, velocidad_viento, presion_atm, descripcion))
                 conn.commit()
-                print(f"   -> Éxito. Se guardó el clima actual: Temp {temp_c}°C, Lluvia {lluvia_mm}mm")
+                print(f"   -> Éxito. Clima: Temp {temp_c}°C, Humedad {humedad}%, Viento {velocidad_viento} m/s, Presión {presion_atm} hPa")
                 precipitacion_activa = True
             except sqlite3.IntegrityError:
                 print("   -> El clima de este momento ya estaba registrado.")
@@ -161,7 +151,7 @@ else:
 
     except Exception as e:
         print(f"   -> Error al consultar OpenWeatherMap: {e}")
-        print("      El reporte continuará sin datos de lluvia.")
+        print("      El reporte continuará sin datos climáticos.")
 
 # ==========================================
 # MÓDULO 3: LECTURA Y ANÁLISIS DE DATOS
@@ -177,15 +167,15 @@ query_sensor = """
 """
 df_presion = pd.read_sql_query(query_sensor, conn)
 
-# --- Datos de precipitación ---
-df_lluvia = pd.DataFrame()
+# --- Datos de clima (expandidos) ---
+df_clima = pd.DataFrame()
 if precipitacion_activa:
-    query_lluvia = """
-        SELECT fecha, lluvia_mm, humedad_pct, temp_c
+    query_clima = """
+        SELECT fecha, lluvia_mm, humedad_pct, temp_c, velocidad_viento_ms, presion_atm_hpa, descripcion
         FROM precipitacion
         ORDER BY fecha ASC
     """
-    df_lluvia = pd.read_sql_query(query_lluvia, conn)
+    df_clima = pd.read_sql_query(query_clima, conn)
 
 conn.close()
 
@@ -224,30 +214,53 @@ else:
     print(f"   -> Anomalías/Transitorios detectados: {len(anomalias)}")
 
     # ==========================================
-    # ANÁLISIS DE CORRELACIÓN LLUVIA ↔ PRESIÓN ↔ NIVEL
+    # ANÁLISIS DE CLIMA Y CORRELACIONES
     # ==========================================
     correlacion_lluvia_presion = None
-    correlacion_lluvia_nivel   = None
-    lluvia_total_6m   = 0.0
-    lluvia_promedio   = 0.0
-    dias_con_lluvia   = 0
-    df_merged         = pd.DataFrame()
+    correlacion_temp_presion = None
+    correlacion_humedad_presion = None
+    correlacion_viento_presion = None
+    
+    temp_promedio = 0.0
+    humedad_promedio = 0.0
+    viento_promedio = 0.0
+    presion_atm_promedio = 0.0
+    lluvia_total = 0.0
+    dias_con_lluvia = 0
+    df_merged = pd.DataFrame()
 
-    if not df_lluvia.empty:
-        df_lluvia["created_at"] = pd.to_datetime(df_lluvia["fecha"])
-        df_lluvia["lluvia_mm"]  = pd.to_numeric(df_lluvia["lluvia_mm"], errors="coerce").fillna(0)
+    if not df_clima.empty:
+        df_clima["created_at"] = pd.to_datetime(df_clima["fecha"])
+        df_clima["lluvia_mm"]  = pd.to_numeric(df_clima["lluvia_mm"], errors="coerce").fillna(0)
+        df_clima["humedad_pct"] = pd.to_numeric(df_clima["humedad_pct"], errors="coerce").fillna(0)
+        df_clima["temp_c"] = pd.to_numeric(df_clima["temp_c"], errors="coerce").fillna(0)
+        df_clima["velocidad_viento_ms"] = pd.to_numeric(df_clima["velocidad_viento_ms"], errors="coerce").fillna(0)
+        df_clima["presion_atm_hpa"] = pd.to_numeric(df_clima["presion_atm_hpa"], errors="coerce").fillna(0)
 
-        # Resumir precipitación por día para correlacionar con el sensor
-        df_lluvia_diaria = (
-            df_lluvia
+        # Calcular promedios generales
+        temp_promedio = df_clima["temp_c"].mean()
+        humedad_promedio = df_clima["humedad_pct"].mean()
+        viento_promedio = df_clima["velocidad_viento_ms"].mean()
+        presion_atm_promedio = df_clima["presion_atm_hpa"].mean()
+        lluvia_total = df_clima["lluvia_mm"].sum()
+        
+        # Resumir por día
+        df_clima_diaria = (
+            df_clima
             .set_index("created_at")
-            .resample("D")["lluvia_mm"]
-            .sum()
+            .resample("D")[["lluvia_mm", "humedad_pct", "temp_c", "velocidad_viento_ms", "presion_atm_hpa"]]
+            .agg({
+                "lluvia_mm": "sum",
+                "humedad_pct": "mean",
+                "temp_c": "mean",
+                "velocidad_viento_ms": "mean",
+                "presion_atm_hpa": "mean"
+            })
             .reset_index()
         )
-        df_lluvia_diaria.rename(columns={"created_at": "fecha_dia"}, inplace=True)
+        df_clima_diaria.rename(columns={"created_at": "fecha_dia"}, inplace=True)
 
-        # Resumir sensor por día (mediana — robusta a outliers)
+        # Resumir sensor por día (mediana)
         df_sensor_diario = (
             df_presion
             .set_index("created_at")
@@ -258,38 +271,33 @@ else:
         df_sensor_diario.rename(columns={"created_at": "fecha_dia"}, inplace=True)
 
         # Merge por día
-        df_merged = pd.merge(df_sensor_diario, df_lluvia_diaria, on="fecha_dia", how="inner")
-        df_merged.dropna(subset=["presion_psi", "lluvia_mm"], inplace=True)
+        df_merged = pd.merge(df_sensor_diario, df_clima_diaria, on="fecha_dia", how="inner")
+        df_merged.dropna(subset=["presion_psi"], inplace=True)
 
+        # Calcular correlaciones (solo si hay suficientes datos)
         if len(df_merged) >= 3:
-            correlacion_lluvia_presion = df_merged["lluvia_mm"].corr(df_merged["presion_psi"])
-            if "nivel_cm" in df_merged.columns:
-                correlacion_lluvia_nivel = df_merged["lluvia_mm"].corr(df_merged["nivel_cm"])
+            if "lluvia_mm" in df_merged.columns and df_merged["lluvia_mm"].notna().sum() > 0:
+                correlacion_lluvia_presion = df_merged["lluvia_mm"].corr(df_merged["presion_psi"])
+            if "temp_c" in df_merged.columns and df_merged["temp_c"].notna().sum() > 0:
+                correlacion_temp_presion = df_merged["temp_c"].corr(df_merged["presion_psi"])
+            if "humedad_pct" in df_merged.columns and df_merged["humedad_pct"].notna().sum() > 0:
+                correlacion_humedad_presion = df_merged["humedad_pct"].corr(df_merged["presion_psi"])
+            if "velocidad_viento_ms" in df_merged.columns and df_merged["velocidad_viento_ms"].notna().sum() > 0:
+                correlacion_viento_presion = df_merged["velocidad_viento_ms"].corr(df_merged["presion_psi"])
 
-        lluvia_total_6m = df_lluvia["lluvia_mm"].sum()
-        lluvia_promedio  = df_lluvia["lluvia_mm"].mean()
-        dias_con_lluvia  = int((df_lluvia_diaria["lluvia_mm"] > 0.1).sum())
+        dias_con_lluvia = int((df_clima["lluvia_mm"] > 0.1).sum())
 
-        print(f"   -> Lluvia total (6 meses): {lluvia_total_6m:.1f} mm")
-        if correlacion_lluvia_presion is not None:
-            print(f"   -> Correlación lluvia↔presión: {correlacion_lluvia_presion:.3f}")
-        if correlacion_lluvia_nivel is not None:
-            print(f"   -> Correlación lluvia↔nivel:   {correlacion_lluvia_nivel:.3f}")
-
-    # ==========================================
-    # GENERACIÓN DE GRÁFICOS
-    # ==========================================
-  # ==========================================
-# SECCIÓN DE CONSTRUCCIÓN DEL REPORTE PDF
-# (COPIAR DESDE AQUÍ HASTA EL FINAL DEL SCRIPT)
-# ==========================================
+        print(f"   -> Temperatura promedio: {temp_promedio:.2f}°C")
+        print(f"   -> Humedad promedio: {humedad_promedio:.2f}%")
+        print(f"   -> Velocidad del viento promedio: {viento_promedio:.2f} m/s")
+        print(f"   -> Presión atmosférica promedio: {presion_atm_promedio:.2f} hPa")
 
     # ==========================================
     # GENERACIÓN DE GRÁFICOS
     # ==========================================
     fmt = mdates.DateFormatter("%d/%m %H:%M")
 
-    # GRÁFICA 1: Serie temporal de presión completa
+    # GRÁFICA 1: Serie temporal de presión
     fig, ax = plt.subplots(figsize=(12, 4))
     ax.plot(df_presion["created_at"], df_presion["presion_psi"],
             color="#FF9800", linewidth=0.9, label="Presión Red")
@@ -322,7 +330,7 @@ else:
     plt.savefig(os.path.join(GRAFICAS_DIR, "histograma_presion.png"), dpi=150)
     plt.close()
 
-    # GRÁFICA 2.1: BOXPLOT (CAJA Y BIGOTES) — NUEVO GRÁFICO
+    # GRÁFICA 2.1: BOXPLOT
     fig, ax = plt.subplots(figsize=(8, 5))
     bp = ax.boxplot([df_operativo["presion_psi"]], 
                      patch_artist=True,
@@ -331,12 +339,10 @@ else:
                      meanprops=dict(marker='D', markerfacecolor='red', markersize=8, label='Media'))
     ax.set_xticklabels(["Presión Operativa"])
     
-    # Colorear la caja
     for patch in bp['boxes']:
         patch.set_facecolor('#FF9800')
         patch.set_alpha(0.7)
     
-    # Colorear los elementos
     for whisker in bp['whiskers']:
         whisker.set(color='#1565C0', linewidth=1.5)
     for cap in bp['caps']:
@@ -348,7 +354,6 @@ else:
     ax.set_title("Distribución Estadística de Presión — Caja y Bigotes", fontsize=12, fontweight='bold')
     ax.grid(True, alpha=0.3, axis='y')
     
-    # Leyenda personalizada
     ax.text(1.15, p_mean, f"Media: {p_mean:.2f} psi", fontsize=9, color='red', fontweight='bold')
     ax.text(1.15, p_median, f"Mediana: {p_median:.2f} psi", fontsize=9, color='darkred', fontweight='bold')
     
@@ -356,7 +361,7 @@ else:
     plt.savefig(os.path.join(GRAFICAS_DIR, "boxplot_presion.png"), dpi=150)
     plt.close()
 
-    # GRÁFICA 3: Patrón horario de presión (mediana)
+    # GRÁFICA 3: Patrón horario de presión
     df_presion["hora"] = df_presion["created_at"].dt.hour
     p_hora = df_presion.groupby("hora")["presion_psi"].median()
 
@@ -371,17 +376,17 @@ else:
     plt.savefig(os.path.join(GRAFICAS_DIR, "presion_por_hora.png"), dpi=150)
     plt.close()
 
-    # GRÁFICA 4: Precipitación histórica diaria (6 meses) — solo si hay datos de OpenWeather
-    if not df_lluvia.empty:
-        df_lluvia_diaria_plot = (
-            df_lluvia
+    # GRÁFICA 4: Precipitación diaria
+    if not df_clima.empty:
+        df_lluvia_diaria = (
+            df_clima
             .set_index("created_at")
             .resample("D")["lluvia_mm"]
             .sum()
             .reset_index()
         )
         fig, ax = plt.subplots(figsize=(12, 3.5))
-        ax.bar(df_lluvia_diaria_plot["created_at"], df_lluvia_diaria_plot["lluvia_mm"],
+        ax.bar(df_lluvia_diaria["created_at"], df_lluvia_diaria["lluvia_mm"],
                color="#1565C0", alpha=0.75, width=0.8, label="Lluvia diaria (mm)")
         ax.set_xlabel("Fecha")
         ax.set_ylabel("Precipitación [mm/día]")
@@ -393,49 +398,85 @@ else:
         plt.tight_layout()
         plt.savefig(os.path.join(GRAFICAS_DIR, "precipitacion_historica.png"), dpi=150)
         plt.close()
-        print("   -> Gráfica de precipitación histórica generada.")
 
-    # GRÁFICA 5: Correlación Lluvia ↔ Presión (scatter) — solo si hay datos fusionados
-    if not df_merged.empty and correlacion_lluvia_presion is not None:
-        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-
-        # Scatter lluvia vs presión
-        axes[0].scatter(df_merged["lluvia_mm"], df_merged["presion_psi"],
-                        color="#1565C0", alpha=0.6, edgecolors="white", linewidths=0.5)
-        m1, b1 = np.polyfit(df_merged["lluvia_mm"], df_merged["presion_psi"], 1)
-        x_line = np.linspace(df_merged["lluvia_mm"].min(), df_merged["lluvia_mm"].max(), 100)
-        axes[0].plot(x_line, m1 * x_line + b1, color="#FF9800", linewidth=1.5,
-                     label=f"y = {m1:.2f}x + {b1:.1f}")
-        axes[0].set_xlabel("Precipitación [mm/día]")
-        axes[0].set_ylabel("Presión Mediana [psi]")
-        axes[0].set_title(f"Lluvia vs Presión  (r = {correlacion_lluvia_presion:.3f})")
-        axes[0].legend()
-        axes[0].grid(True, alpha=0.2)
-
-        # Scatter lluvia vs nivel (si hay nivel)
-        if correlacion_lluvia_nivel is not None and "nivel_cm" in df_merged.columns:
-            df_nivel_valid = df_merged.dropna(subset=["nivel_cm"])
-            if len(df_nivel_valid) >= 3:
-                axes[1].scatter(df_nivel_valid["lluvia_mm"], df_nivel_valid["nivel_cm"],
-                                color="#4CAF50", alpha=0.6, edgecolors="white", linewidths=0.5)
-                m2, b2 = np.polyfit(df_nivel_valid["lluvia_mm"], df_nivel_valid["nivel_cm"], 1)
-                x_line2 = np.linspace(df_nivel_valid["lluvia_mm"].min(), df_nivel_valid["lluvia_mm"].max(), 100)
-                axes[1].plot(x_line2, m2 * x_line2 + b2, color="#FF9800", linewidth=1.5,
-                             label=f"y = {m2:.2f}x + {b2:.1f}")
-                axes[1].set_xlabel("Precipitación [mm/día]")
-                axes[1].set_ylabel("Nivel Mediano [cm]")
-                axes[1].set_title(f"Lluvia vs Nivel  (r = {correlacion_lluvia_nivel:.3f})")
-                axes[1].legend()
-                axes[1].grid(True, alpha=0.2)
-            else:
-                axes[1].set_visible(False)
-        else:
-            axes[1].set_visible(False)
-
+    # GRÁFICA 5: Serie temporal de temperatura
+    if not df_clima.empty:
+        fig, ax = plt.subplots(figsize=(12, 3.5))
+        ax.plot(df_clima["created_at"], df_clima["temp_c"], color="#E74C3C", linewidth=1.2, marker='o', markersize=3, label="Temperatura")
+        ax.axhline(temp_promedio, color="darkred", linestyle="--", linewidth=1, label=f"Promedio: {temp_promedio:.1f}°C")
+        ax.set_xlabel("Fecha")
+        ax.set_ylabel("Temperatura [°C]")
+        ax.set_title(f"Temperatura Ambiental — {OW_CITY}")
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m"))
+        ax.tick_params(axis="x", rotation=25)
+        ax.grid(True, alpha=0.2)
+        ax.legend()
         plt.tight_layout()
-        plt.savefig(os.path.join(GRAFICAS_DIR, "correlacion_lluvia.png"), dpi=150)
+        plt.savefig(os.path.join(GRAFICAS_DIR, "temperatura.png"), dpi=150)
         plt.close()
-        print("   -> Gráfica de correlación lluvia↔presión/nivel generada.")
+
+    # GRÁFICA 6: Humedad relativa
+    if not df_clima.empty:
+        fig, ax = plt.subplots(figsize=(12, 3.5))
+        ax.plot(df_clima["created_at"], df_clima["humedad_pct"], color="#27AE60", linewidth=1.2, marker='s', markersize=3, label="Humedad Relativa")
+        ax.axhline(humedad_promedio, color="darkgreen", linestyle="--", linewidth=1, label=f"Promedio: {humedad_promedio:.1f}%")
+        ax.fill_between(df_clima["created_at"], 0, 30, alpha=0.1, color="red", label="Riesgo de sequía (<30%)")
+        ax.set_xlabel("Fecha")
+        ax.set_ylabel("Humedad Relativa [%]")
+        ax.set_title(f"Humedad Relativa (Sequía Ambiental) — {OW_CITY}")
+        ax.set_ylim(0, 100)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m"))
+        ax.tick_params(axis="x", rotation=25)
+        ax.grid(True, alpha=0.2)
+        ax.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(GRAFICAS_DIR, "humedad.png"), dpi=150)
+        plt.close()
+
+    # GRÁFICA 7: Velocidad del viento
+    if not df_clima.empty:
+        fig, ax = plt.subplots(figsize=(12, 3.5))
+        ax.bar(df_clima["created_at"], df_clima["velocidad_viento_ms"], color="#3498DB", alpha=0.75, width=0.02, label="Velocidad del Viento")
+        ax.axhline(viento_promedio, color="darkblue", linestyle="--", linewidth=1, label=f"Promedio: {viento_promedio:.2f} m/s")
+        ax.set_xlabel("Fecha")
+        ax.set_ylabel("Velocidad [m/s]")
+        ax.set_title(f"Velocidad del Viento — {OW_CITY}")
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m"))
+        ax.tick_params(axis="x", rotation=25)
+        ax.grid(True, alpha=0.2, axis="y")
+        ax.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(GRAFICAS_DIR, "viento.png"), dpi=150)
+        plt.close()
+
+    # GRÁFICA 8: Matriz de correlaciones (heatmap simplificado)
+    if not df_merged.empty and len(df_merged) >= 3:
+        variables_corr = ["presion_psi", "lluvia_mm", "temp_c", "humedad_pct", "velocidad_viento_ms"]
+        df_corr_subset = df_merged[variables_corr].dropna()
+        
+        if len(df_corr_subset) >= 3:
+            corr_matrix = df_corr_subset.corr()
+            
+            fig, ax = plt.subplots(figsize=(8, 6))
+            im = ax.imshow(corr_matrix, cmap='coolwarm', vmin=-1, vmax=1, aspect='auto')
+            
+            labels = ["Presión", "Lluvia", "Temp", "Humedad", "Viento"]
+            ax.set_xticks(range(len(labels)))
+            ax.set_yticks(range(len(labels)))
+            ax.set_xticklabels(labels, rotation=45, ha='right')
+            ax.set_yticklabels(labels)
+            
+            # Anotaciones de valores
+            for i in range(len(labels)):
+                for j in range(len(labels)):
+                    text = ax.text(j, i, f'{corr_matrix.iloc[i, j]:.2f}',
+                                   ha="center", va="center", color="black", fontsize=9)
+            
+            ax.set_title("Matriz de Correlaciones — Variables Climáticas vs Presión", fontweight='bold')
+            plt.colorbar(im, ax=ax, label="Coeficiente r")
+            plt.tight_layout()
+            plt.savefig(os.path.join(GRAFICAS_DIR, "matriz_correlaciones.png"), dpi=150)
+            plt.close()
 
     print(f"   -> Todos los gráficos guardados en: '{GRAFICAS_DIR}'")
 
@@ -446,16 +487,13 @@ else:
     f_ini = df_presion["created_at"].min().strftime("%d/%m/%Y %H:%M")
     f_fin = df_presion["created_at"].max().strftime("%d/%m/%Y %H:%M")
 
-    # Función para dibujar encabezado y pie de página en cada página
     def add_header_footer(canvas, doc):
         canvas.saveState()
-        # Encabezado
         canvas.setFont('Helvetica-Bold', 10)
         canvas.setFillColor(colors.HexColor("#1565C0"))
         canvas.drawString(2*cm, A4[1] - 1.5*cm, "JAAPRV Sinchal — Monitoreo Hídrico")
         canvas.line(2*cm, A4[1] - 1.7*cm, A4[0] - 2*cm, A4[1] - 1.7*cm)
         
-        # Pie de página
         canvas.setFont('Helvetica', 9)
         canvas.setFillColor(colors.gray)
         fecha_hoy = datetime.now().strftime("%d/%m/%Y")
@@ -469,7 +507,7 @@ else:
                             topMargin=2.5*cm, bottomMargin=2.5*cm,
                             title="Reporte Hidráulico Técnico",
                             author="Sistema Automático JAAPRV",
-                            subject="Monitoreo de Presión y Precipitación")
+                            subject="Monitoreo de Presión y Clima")
 
     styles = getSampleStyleSheet()
     title_s = ParagraphStyle("T", parent=styles["Title"],    fontSize=16, spaceAfter=4,
@@ -484,7 +522,7 @@ else:
 
     story = []
     story.append(Paragraph("Fortalecimiento del Sistema Hídrico — JAAPRV Sinchal", sub_s))
-    story.append(Paragraph("Reporte Técnico: Presión, Nivel y Precipitación", title_s))
+    story.append(Paragraph("Reporte Técnico: Presión, Nivel y Análisis Climático", title_s))
     story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1565C0")))
     story.append(Spacer(1, 0.2*cm))
     story.append(Paragraph(
@@ -503,7 +541,7 @@ else:
     story.append(Spacer(1, 0.3*cm))
 
     # --- SECCIÓN 2: Tabla estadística del sensor ---
-    story.append(Paragraph("2. Resumen Estadístico del Sensor", h1_s))
+    story.append(Paragraph("2. Resumen Estadístico del Sensor de Presión", h1_s))
     t_data = [
         ["Métrica Operativa", "Valor Calculado"],
         ["Registros Históricos Procesados",    f"{len(df_presion):,}"],
@@ -527,7 +565,7 @@ else:
     story.append(t)
     story.append(Spacer(1, 0.4*cm))
 
-    # --- SECCIÓN 2.1: BOXPLOT (NUEVO) ---
+    # --- SECCIÓN 2.1: BOXPLOT ---
     story.append(Paragraph("2.1 Distribución Visual — Caja y Bigotes", h1_s))
     story.append(Paragraph(
         "El gráfico de caja y bigotes representa visualmente la distribución de presión: "
@@ -536,39 +574,32 @@ else:
     story.append(Spacer(1, 0.2*cm))
     boxplot_png = os.path.join(GRAFICAS_DIR, "boxplot_presion.png")
     if os.path.exists(boxplot_png):
-        story.append(Image(boxplot_png, width=13*cm, height=8*cm))
-    story.append(Spacer(1, 0.4*cm))
+        story.append(Image(boxplot_png, width=12*cm, height=7.5*cm))
+    story.append(Spacer(1, 0.3*cm))
     story.append(PageBreak())
 
-    # --- SECCIÓN 3: OpenWeatherMap — precipitación e impacto ---
-    story.append(Paragraph("3. Análisis de Precipitación — OpenWeatherMap (Recolección Diaria)", h1_s))
+    # --- SECCIÓN 3: Análisis climático ---
+    story.append(Paragraph("3. Análisis Climático Integrado — OpenWeatherMap (Recolección Diaria)", h1_s))
 
-    if precipitacion_activa and not df_lluvia.empty:
-        # Interpretación de la correlación
-        def interpretar_correlacion(r):
-            if r is None: return "No calculable (< 90 días de histórico requeridos. Objetivo: Dic 2026)"
-            if abs(r) >= 0.7: fuerza = "fuerte"
-            elif abs(r) >= 0.4: fuerza = "moderada"
-            else: fuerza = "débil"
-            direccion = "positiva" if r >= 0 else "negativa"
-            return f"{r:.3f} — correlación {fuerza} {direccion}"
-
+    if precipitacion_activa and not df_clima.empty:
         story.append(Paragraph(
-            f"Se integró la fuente de precipitación actual de OpenWeatherMap para las coordenadas "
-            f"de la zona de captación ({OW_LAT}°, {OW_LON}°). Se recopila un registro diario desde "
-            f"el 4 de septiembre para enriquecer el modelo matemático con la lluvia como entrada al sistema.", norm_s))
+            f"Se integró la fuente de datos climáticos de OpenWeatherMap para las coordenadas "
+            f"de la zona de captación ({OW_LAT}°, {OW_LON}°). Se recopilan registros diarios desde "
+            f"el 4 de septiembre para enriquecer el modelo matemático con múltiples variables ambientales.", norm_s))
         story.append(Spacer(1, 0.2*cm))
 
-        ow_data_table = [
+        # Tabla de métricas climáticas
+        climat_data = [
             ["Métrica Climática", "Valor"],
-            ["Precipitación Total (Acumulada)",  f"{lluvia_total_6m:.1f} mm"],
-            ["Precipitación Promedio Diaria",  f"{lluvia_promedio:.2f} mm/día"],
+            ["Temperatura Promedio",  f"{temp_promedio:.2f}°C"],
+            ["Humedad Relativa Promedio",  f"{humedad_promedio:.2f}%"],
+            ["Velocidad del Viento Promedio", f"{viento_promedio:.2f} m/s"],
+            ["Presión Atmosférica Media",  f"{presion_atm_promedio:.2f} hPa"],
+            ["Precipitación Total (Acumulada)",  f"{lluvia_total:.1f} mm"],
             ["Días con lluvia registrada",     str(dias_con_lluvia)],
-            ["Correlación Lluvia ↔ Presión",   interpretar_correlacion(correlacion_lluvia_presion)],
-            ["Correlación Lluvia ↔ Nivel",     interpretar_correlacion(correlacion_lluvia_nivel)],
         ]
-        ow_t = Table(ow_data_table, colWidths=[8.5*cm, 5.5*cm])
-        ow_t.setStyle(TableStyle([
+        climat_t = Table(climat_data, colWidths=[8.5*cm, 5.5*cm])
+        climat_t.setStyle(TableStyle([
             ("BACKGROUND",    (0,0), (-1,0), colors.HexColor("#1565C0")),
             ("TEXTCOLOR",     (0,0), (-1,0), colors.white),
             ("ALIGN",         (0,0), (-1,-1), "CENTER"),
@@ -576,46 +607,70 @@ else:
             ("ROWBACKGROUNDS",(0,1), (-1,-1), [colors.HexColor("#EDF7FF"), colors.white]),
             ("PADDING",       (0,0), (-1,-1), 5),
         ]))
-        story.append(ow_t)
-        story.append(Spacer(1, 0.4*cm))
+        story.append(climat_t)
+        story.append(Spacer(1, 0.3*cm))
+
+        # Tabla de correlaciones
+        story.append(Paragraph("3.1 Estado de Correlaciones con Presión de Red", h1_s))
+        corr_data = [
+            ["Variable Climática", "Correlación"],
+            ["Lluvia ↔ Presión",   "No calculable"],
+            ["Temperatura ↔ Presión",   "No calculable"],
+            ["Humedad ↔ Presión",   "No calculable"],
+            ["Viento ↔ Presión",   "No calculable"],
+        ]
+        corr_t = Table(corr_data, colWidths=[8.5*cm, 5.5*cm])
+        corr_t.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0), (-1,0), colors.HexColor("#F39C12")),
+            ("TEXTCOLOR",     (0,0), (-1,0), colors.white),
+            ("ALIGN",         (0,0), (-1,-1), "CENTER"),
+            ("GRID",          (0,0), (-1,-1), 0.5, colors.HexColor("#CCCCCC")),
+            ("ROWBACKGROUNDS",(0,1), (-1,-1), [colors.HexColor("#FEF5E7"), colors.white]),
+            ("PADDING",       (0,0), (-1,-1), 5),
+        ]))
+        story.append(corr_t)
+        story.append(Spacer(1, 0.3*cm))
 
         # Interpretación narrativa
-        if correlacion_lluvia_presion is not None:
-            if correlacion_lluvia_presion > 0.4:
-                interp = (
-                    "La correlación positiva indica que los eventos de lluvia intensa incrementan "
-                    "la presión en la red, posiblemente por recarga de la captación y mayor columna "
-                    "de agua disponible."
-                )
-            elif correlacion_lluvia_presion < -0.4:
-                interp = (
-                    "La correlación negativa sugiere que la lluvia reduce la demanda de agua de la "
-                    "red (los usuarios disminuyen el consumo en días lluviosos), lo que puede "
-                    "explicar las variaciones de presión observadas."
-                )
-            else:
-                interp = (
-                    "La correlación es débil, lo que indica que la presión en la red no depende "
-                    "directamente de la lluvia a nivel diario. Otros factores (apertura de válvulas, "
-                    "demanda horaria) dominan el comportamiento de la red."
-                )
-            story.append(Paragraph(f"<b>Interpretación:</b> {interp}", norm_s))
+        story.append(Paragraph(
+            "<b>Nota sobre correlaciones:</b> Las correlaciones requieren mínimo 90 días de histórico para ser estadísticamente significativas. "
+            "Objetivo: Diciembre 2026. Una vez acumulado este período, se podrá determinar si la temperatura, humedad, viento y lluvia "
+            "influyen directamente en la presión de la red de distribución.", norm_s))
+
+        # Interpretación de sequía
+        if humedad_promedio < 30:
+            sequedad_interp = (
+                f"<b>Alerta: Riesgo de Sequía.</b> La humedad promedio es {humedad_promedio:.1f}%, "
+                "indicativo de condiciones de sequía ambiental. Esto puede afectar la disponibilidad de agua en el reservorio."
+            )
+        elif humedad_promedio < 50:
+            sequedad_interp = (
+                f"<b>Humedad baja.</b> El promedio de {humedad_promedio:.1f}% sugiere condiciones moderadamente secas. "
+                "Monitorear la recarga del reservorio en los próximos días."
+            )
+        else:
+            sequedad_interp = (
+                f"<b>Humedad normal.</b> El promedio de {humedad_promedio:.1f}% indica condiciones húmedas adecuadas. "
+                "No se reportan señales inmediatas de sequía."
+            )
+        story.append(Paragraph(sequedad_interp, norm_s))
+        story.append(Spacer(1, 0.3*cm))
 
     else:
         story.append(Paragraph(
             "⚠ INTEGRACIÓN OPENWEATHER NO ACTIVA en esta ejecución. "
-            "Para activarla, configure el Secret OPENWEATHER_API_KEY en GitHub Actions "
-            "o exporte la variable de entorno antes de ejecutar el script.", warn_s))
+            "Para activarla, configure el Secret OPENWEATHER_API_KEY en GitHub Actions.", warn_s))
 
     story.append(Spacer(1, 0.3*cm))
+    story.append(PageBreak())
 
     # --- SECCIÓN 4: Gráficos del sensor ---
     story.append(Paragraph("4. Comportamiento Temporal e Histogramas Operativos", h1_s))
     story.append(Image(os.path.join(GRAFICAS_DIR, "serie_temporal_presion.png"),
-                       width=16*cm, height=5.3*cm))
+                       width=15*cm, height=5*cm))
     story.append(Spacer(1, 0.3*cm))
     story.append(Image(os.path.join(GRAFICAS_DIR, "histograma_presion.png"),
-                       width=12*cm, height=6*cm))
+                       width=11*cm, height=5.5*cm))
     story.append(Spacer(1, 0.3*cm))
     story.append(PageBreak())
 
@@ -626,61 +681,83 @@ else:
     story.append(Spacer(1, 0.4*cm))
     story.append(PageBreak())
 
-    # --- SECCIÓN 6: Gráficos de precipitación (solo si activo) ---
+    # --- SECCIÓN 6: Gráficos climáticos ---
+    story.append(Paragraph("6. Análisis de Variables Climáticas", h1_s))
+    
     lluvia_png = os.path.join(GRAFICAS_DIR, "precipitacion_historica.png")
-    correl_png = os.path.join(GRAFICAS_DIR, "correlacion_lluvia.png")
+    temp_png = os.path.join(GRAFICAS_DIR, "temperatura.png")
+    humedad_png = os.path.join(GRAFICAS_DIR, "humedad.png")
+    viento_png = os.path.join(GRAFICAS_DIR, "viento.png")
 
     if os.path.exists(lluvia_png):
-        story.append(Paragraph("6. Precipitación Histórica (OpenWeatherMap)", h1_s))
-        story.append(Image(lluvia_png, width=16*cm, height=5.3*cm))
-        story.append(Spacer(1, 0.3*cm))
+        story.append(Paragraph("6.1 Precipitación Diaria", h1_s))
+        story.append(Image(lluvia_png, width=12*cm, height=4*cm))
+        story.append(Spacer(1, 0.2*cm))
 
-    if os.path.exists(correl_png):
-        story.append(Paragraph("7. Correlación Lluvia ↔ Presión / Nivel", h1_s))
-        story.append(Image(correl_png, width=16*cm, height=5.5*cm))
+    if os.path.exists(temp_png):
+        story.append(Paragraph("6.2 Temperatura Ambiental", h1_s))
+        story.append(Image(temp_png, width=12*cm, height=4*cm))
+        story.append(Spacer(1, 0.2*cm))
+
+    if os.path.exists(humedad_png):
+        story.append(Paragraph("6.3 Humedad Relativa (Indicador de Sequía)", h1_s))
+        story.append(Image(humedad_png, width=12*cm, height=4*cm))
+        story.append(Spacer(1, 0.2*cm))
+
+    if os.path.exists(viento_png):
+        story.append(Paragraph("6.4 Velocidad del Viento", h1_s))
+        story.append(Image(viento_png, width=12*cm, height=4*cm))
+        story.append(Spacer(1, 0.2*cm))
+
+    story.append(PageBreak())
+
+    # --- SECCIÓN 7: Matriz de correlaciones ---
+    matriz_png = os.path.join(GRAFICAS_DIR, "matriz_correlaciones.png")
+    if os.path.exists(matriz_png):
+        story.append(Paragraph("7. Matriz de Correlaciones Climáticas (Estado Actual)", h1_s))
+        story.append(Image(matriz_png, width=12*cm, height=9*cm))
         story.append(Spacer(1, 0.3*cm))
         story.append(Paragraph(
-            "<b>Nota metodológica:</b> La correlación se calculó agregando ambas fuentes "
-            "por día calendario (mediana del sensor + suma de lluvia). El coeficiente r de "
-            "Pearson mide la relación lineal entre variables: r cercano a +1 o -1 indica "
-            "correlación fuerte; r cercano a 0 indica independencia estadística.", norm_s))
+            "<b>Nota metodológica:</b> La matriz muestra correlaciones entre presión de red y variables climáticas. "
+            "Valores cercanos a +1 indican relación positiva fuerte; cercanos a -1, relación negativa fuerte; "
+            "cercanos a 0, independencia estadística. Requiere mínimo 90 días para validez estadística.", norm_s))
         story.append(Spacer(1, 0.3*cm))
 
     story.append(PageBreak())
 
-    # --- SECCIÓN 8: Conclusiones y Recomendaciones ---
+    # --- SECCIÓN 8: Conclusiones ---
     story.append(Paragraph("Conclusiones y Recomendaciones", title_s))
     story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1565C0")))
     story.append(Spacer(1, 0.5*cm))
     
     story.append(Paragraph("Estado general del sistema", h1_s))
     story.append(Paragraph(
-        f"La red muestra un comportamiento general con una presión media operativa "
-        f"de <b>{p_mean:.2f} psi</b> (mediana: <b>{p_median:.2f} psi</b>). Se han identificado "
-        f"<b>{len(anomalias)}</b> eventos transitorios (picos o caídas) que se salen del comportamiento típico. "
-        f"El 50% de las lecturas operativas se concentran entre <b>{df_operativo['presion_psi'].quantile(0.25):.1f}</b> "
-        f"y <b>{df_operativo['presion_psi'].quantile(0.75):.1f} psi</b>.", norm_s))
+        f"La red muestra una presión media operativa de <b>{p_mean:.2f} psi</b> (mediana: <b>{p_median:.2f} psi</b>). "
+        f"Se han identificado <b>{len(anomalias)}</b> eventos transitorios. "
+        f"El 50% de las lecturas se concentran entre <b>{df_operativo['presion_psi'].quantile(0.25):.1f}</b> "
+        f"y <b>{df_operativo['presion_psi'].quantile(0.75):.1f} psi</b>. "
+        f"Condiciones climáticas: Temperatura <b>{temp_promedio:.1f}°C</b>, "
+        f"Humedad <b>{humedad_promedio:.1f}%</b>, Viento <b>{viento_promedio:.2f} m/s</b>.", norm_s))
     story.append(Spacer(1, 0.3*cm))
     
     story.append(Paragraph("Próximos pasos recomendados", h1_s))
     story.append(Paragraph(
-        "• <b>Monitorear continuamente</b> los picos máximos para descartar problemas de golpe de ariete.<br/>"
-        "• <b>Mantener el cruce diario</b> de datos de precipitación para consolidar el modelo matemático de predicción.<br/>"
-        "• <b>Inspeccionar válvulas y bombas</b> si la frecuencia de anomalías aumenta en los próximos meses.<br/>"
-        "• <b>Validar correlación lluvia-presión</b> conforme acumule más registros de precipitación (objetivo: 3 meses de datos).", norm_s))
+        "• <b>Monitorear continuamente</b> los picos máximos para descartar golpe de ariete.<br/>"
+        "• <b>Correlacionar variables climáticas</b> con presión cuando se acumule 90 días de datos (dic 2026).<br/>"
+        "• <b>Vigilar humedad relativa</b>: valores < 30% indican riesgo de sequía y menor recarga del reservorio.<br/>"
+        "• <b>Registrar eventos de viento fuerte</b> para validar su impacto en presión y demanda.<br/>"
+        "• <b>Inspeccionar infraestructura</b> si la frecuencia de anomalías aumenta.", norm_s))
     story.append(Spacer(1, 0.3*cm))
     
-    story.append(Paragraph("Limitaciones del análisis actual", h1_s))
+    story.append(Paragraph("Limitaciones y próximas fases", h1_s))
     story.append(Paragraph(
-        "<b>Sensor de nivel ultrasónico:</b> Puede presentar pérdida de eco, lecturas nulas "
-        "o ruido por condensación y telarañas, lo que limita el análisis confiable del volumen "
-        "de almacenamiento en tiempo real. Se recomienda reparación o reemplazo prioritario.<br/><br/>"
-        "<b>Datos de precipitación:</b> Recolección iniciada el 4 de septiembre 2026. Requiere mínimo 3 meses "
-        "de histórico para validar correlaciones estadísticas significativas.", norm_s))
+        "<b>Sensor de nivel:</b> No operativo. Prioritario para validar recarga por precipitación.<br/><br/>"
+        "<b>Datos climáticos:</b> Recolección desde 04 sept 2026. Fase 2 (dic 2026): Correlaciones estadísticas. "
+        "Fase 3 (2027): Modelado predictivo con ARIMA/Prophet integrando variables climáticas.", norm_s))
     story.append(Spacer(1, 0.5*cm))
 
-    # Compilar el PDF
+    # Compilar PDF
     doc.build(story, onFirstPage=add_header_footer, onLaterPages=add_header_footer)
     print(f"\n✓ REPORTE PDF GENERADO CON ÉXITO: '{PDF_OUTPUT_PATH}'")
-    print(f"  Incluye datos OpenWeatherMap: {'SÍ' if precipitacion_activa else 'NO (configura OPENWEATHER_API_KEY)'}")
-    print(f"  Gráficos incluidos: serie temporal, histograma, boxplot, patrón horario, precipitación, correlación")
+    print(f"  Variables climáticas: {'SÍ' if precipitacion_activa else 'NO'}")
+    print(f"  Gráficos: presión, temperatura, humedad, viento, matriz de correlaciones")
