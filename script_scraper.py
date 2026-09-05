@@ -11,7 +11,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import cm
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, HRFlowable
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, HRFlowable, PageBreak
 from reportlab.lib.enums import TA_CENTER
 import os
 
@@ -404,9 +404,30 @@ else:
     f_ini = df_presion["created_at"].min().strftime("%d/%m/%Y %H:%M")
     f_fin = df_presion["created_at"].max().strftime("%d/%m/%Y %H:%M")
 
+    # Función para dibujar encabezado y pie de página en cada página
+    def add_header_footer(canvas, doc):
+        canvas.saveState()
+        # Encabezado
+        canvas.setFont('Helvetica-Bold', 10)
+        canvas.setFillColor(colors.HexColor("#1565C0"))
+        canvas.drawString(2*cm, A4[1] - 1.5*cm, "JAAPRV Sinchal — Monitoreo Hídrico")
+        canvas.line(2*cm, A4[1] - 1.7*cm, A4[0] - 2*cm, A4[1] - 1.7*cm)
+        
+        # Pie de página
+        canvas.setFont('Helvetica', 9)
+        canvas.setFillColor(colors.gray)
+        fecha_hoy = datetime.now().strftime("%d/%m/%Y")
+        page_num = canvas.getPageNumber()
+        canvas.drawString(2*cm, 1.5*cm, f"Generado: {fecha_hoy}")
+        canvas.drawRightString(A4[0] - 2*cm, 1.5*cm, f"Página {page_num}")
+        canvas.restoreState()
+
     doc = SimpleDocTemplate(PDF_OUTPUT_PATH, pagesize=A4,
                             rightMargin=2*cm, leftMargin=2*cm,
-                            topMargin=2*cm, bottomMargin=2*cm)
+                            topMargin=2.5*cm, bottomMargin=2.5*cm,
+                            title="Reporte Hidráulico Técnico",
+                            author="Sistema Automático JAAPRV",
+                            subject="Monitoreo de Presión y Precipitación")
 
     styles = getSampleStyleSheet()
     title_s = ParagraphStyle("T", parent=styles["Title"],    fontSize=16, spaceAfter=4,
@@ -538,11 +559,13 @@ else:
     story.append(Image(os.path.join(GRAFICAS_DIR, "histograma_presion.png"),
                        width=12*cm, height=6*cm))
     story.append(Spacer(1, 0.3*cm))
+    story.append(PageBreak())
 
     # --- SECCIÓN 5: Patrón horario ---
     story.append(Paragraph("5. Perfil Operativo Horario Continuo", h1_s))
     story.append(Image(os.path.join(GRAFICAS_DIR, "presion_por_hora.png"),
                        width=15*cm, height=5*cm))
+    story.append(PageBreak())
 
     # --- SECCIÓN 6: Gráficos de precipitación (solo si activo) ---
     lluvia_png = os.path.join(GRAFICAS_DIR, "precipitacion_historica.png")
@@ -563,7 +586,28 @@ else:
             "Pearson mide la relación lineal entre variables: r cercano a +1 o -1 indica "
             "correlación fuerte; r cercano a 0 indica independencia estadística.", norm_s))
 
+    # --- SECCIÓN 8: Conclusiones y Recomendaciones ---
+    story.append(PageBreak())
+    story.append(Paragraph("Conclusiones y Recomendaciones", title_s))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1565C0")))
+    story.append(Spacer(1, 0.5*cm))
+    
+    story.append(Paragraph("Estado general del sistema", h1_s))
+    story.append(Paragraph(f"La red muestra un comportamiento general con una presión media operativa "
+                           f"de {p_mean:.2f} psi. Se han identificado {len(anomalias)} "
+                           "eventos transitorios (picos o caídas) que se salen del comportamiento típico.", norm_s))
+    
+    story.append(Paragraph("Próximos pasos recomendados", h1_s))
+    story.append(Paragraph("• Monitorear continuamente los picos máximos para descartar problemas de golpe de ariete.<br/>"
+                           "• Mantener el cruce diario de datos de precipitación para consolidar el modelo matemático.<br/>"
+                           "• Inspeccionar las válvulas y bombas si la frecuencia de anomalías aumenta.", norm_s))
+    
+    story.append(Paragraph("Limitaciones del análisis actual", h1_s))
+    story.append(Paragraph("El sensor ultrasónico de nivel puede presentar pérdida de eco, lecturas nulas "
+                           "o ruido por condensación y telarañas, lo que limita el análisis confiable del volumen "
+                           "de almacenamiento en tiempo real.", norm_s))
+
     # Compilar el PDF
-    doc.build(story)
+    doc.build(story, onFirstPage=add_header_footer, onLaterPages=add_header_footer)
     print(f"\n✓ REPORTE PDF GENERADO CON ÉXITO: '{PDF_OUTPUT_PATH}'")
     print(f"  Incluye datos OpenWeatherMap: {'SÍ' if precipitacion_activa else 'NO (configura OPENWEATHER_API_KEY)'}")
