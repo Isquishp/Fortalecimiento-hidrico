@@ -29,6 +29,8 @@ jobs:
 
     # 4. Ejecutar tu script de análisis y sincronización
     - name: Ejecutar Script de Monitoreo
+      env:
+        OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
       run: python script_scraper.py
 
     # 5. Guardar los cambios (El .db actualizado y el nuevo PDF) en tu GitHub
