@@ -385,8 +385,7 @@ else:
                color="#1565C0", alpha=0.75, width=0.8, label="Lluvia diaria (mm)")
         ax.set_xlabel("Fecha")
         ax.set_ylabel("Precipitación [mm/día]")
-        ax.set_title(f"Precipitación Histórica Últimos 6 Meses — {OW_CITY}")
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m/%y"))
+        ax.set_title(f"Precipitación — Recolección Diaria desde 04 de Septiembre — {OW_CITY}")        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m/%y"))
         ax.tick_params(axis="x", rotation=25)
         ax.grid(True, alpha=0.2, axis="y")
         ax.legend()
@@ -546,7 +545,7 @@ else:
     if precipitacion_activa and not df_lluvia.empty:
         # Interpretación de la correlación
         def interpretar_correlacion(r):
-            if r is None: return "No calculable (datos insuficientes)"
+            if r is None: return "No calculable (< 90 días de histórico requeridos. Objetivo: Dic 2026)"
             if abs(r) >= 0.7: fuerza = "fuerte"
             elif abs(r) >= 0.4: fuerza = "moderada"
             else: fuerza = "débil"
