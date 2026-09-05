@@ -482,8 +482,8 @@ else:
 
         ow_data_table = [
             ["Métrica Climática", "Valor"],
-            ["Precipitación Total (6 meses)",  f"{lluvia_total_6m:.1f} mm"],
-            ["Precipitación Promedio Horaria", f"{lluvia_promedio:.2f} mm/h"],
+            ["Precipitación Total (Acumulada)",  f"{lluvia_total_6m:.1f} mm"],
+            ["Precipitación Promedio Diaria",  f"{lluvia_promedio:.2f} mm/día"],
             ["Días con lluvia registrada",     str(dias_con_lluvia)],
             ["Correlación Lluvia ↔ Presión",   interpretar_correlacion(correlacion_lluvia_presion)],
             ["Correlación Lluvia ↔ Nivel",     interpretar_correlacion(correlacion_lluvia_nivel)],
