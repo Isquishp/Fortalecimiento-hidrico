@@ -121,10 +121,16 @@ else:
             f"?lat={OW_LAT}&lon={OW_LON}"
             f"&appid={OPENWEATHER_API_KEY}&units=metric"
         )
-        
+        ow_debug_url = (
+            f"https://api.openweathermap.org/data/2.5/weather"
+            f"?lat={OW_LAT}&lon={OW_LON}&appid=***&units=metric"
+        )
+        print(f"   -> URL llamada: {ow_debug_url}")
         resp = requests.get(ow_url, timeout=30)
+        print(f"   -> Status HTTP: {resp.status_code}")
         if resp.status_code == 200:
             ow_data = resp.json()
+            print(f"   -> JSON recibido. Campos: {', '.join(ow_data.keys())}")
             
             # Hora actual local
             fecha_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -136,6 +142,13 @@ else:
             velocidad_viento = ow_data.get("wind", {}).get("speed", 0.0)
             presion_atm = ow_data.get("main", {}).get("pressure", 0.0)
             descripcion = ow_data.get("weather", [{}])[0].get("description", "")
+
+            print("   -> Valores extraídos:")
+            print(f"      Temp: {temp_c} (tipo: {type(temp_c).__name__})")
+            print(f"      Humedad: {humedad} (tipo: {type(humedad).__name__})")
+            print(f"      Lluvia: {lluvia_mm} (tipo: {type(lluvia_mm).__name__})")
+            print(f"      Viento: {velocidad_viento} (tipo: {type(velocidad_viento).__name__})")
+            print(f"      Presión: {presion_atm} (tipo: {type(presion_atm).__name__})")
             
             try:
                 cursor.execute('''
