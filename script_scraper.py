@@ -127,7 +127,7 @@ else:
     try:
         # Usamos la API Current Weather de OpenWeather (100% Gratuita)
         ow_url = (
-            f"https://api.openweathermap.org/data/4.0/onecall/"
+            f"https://api.openweathermap.org/data/2.5/weather/"
             f"?lat={OW_LAT}&lon={OW_LON}"
             f"&appid={OPENWEATHER_API_KEY}&units=metric"
         )
